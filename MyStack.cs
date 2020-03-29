@@ -1,66 +1,67 @@
 using Pulumi;
+using Pulumi.Azure.Compute;
 using Pulumi.Azure.Core;
-using Pulumi.Azure.Storage;
 using Pulumi.Azure.Network;
 using Pulumi.Azure.Network.Inputs;
 using Pulumi.Azure.ContainerService;
 using Pulumi.Azure.ContainerService.Inputs;
+using Pulumi.Docker;
 using System;
 using System.Collections.Generic;
 
 class MyStack : Stack
 {
-    private readonly string _uniqueid = DateTime.Now.ToString("yyyyMMdd");
-    private const string _azureGatewayNetworkUniqueName = "default";
+    private const string AzureGatewayNetworkName = "default";
 
     public MyStack()
     {
         // Create an Azure Resource Group
-        var applicationResourceGroup = new ResourceGroup("my-application", new ResourceGroupArgs()
+        var applicationResourceGroup = new ResourceGroup("pulumi-appgateway-hosting-example", new ResourceGroupArgs()
         { 
-            Name = "my-application"
+            Name = "pulumi-appgateway-hosting-example"
         });
-
-        var networkResourceGroup = new ResourceGroup("my-network", new ResourceGroupArgs()
-        {
-            Name = "my-network"
-        });
-
-        // Create an Azure Storage Account
-        var storageAccount = new Account("storage", new AccountArgs
+        var registry = new Registry("global", new RegistryArgs
         {
             ResourceGroupName = applicationResourceGroup.Name,
-            AccountReplicationType = "LRS",
-            AccountTier = "Standard"
+            AdminEnabled = true,
+            Sku = "Premium",
         });
-
-        var vnet = new VirtualNetwork("myvnet", new VirtualNetworkArgs()
+        var dockerImage = new Pulumi.Docker.Image("my-app", new Pulumi.Docker.ImageArgs
+        {
+            ImageName = Output.Format($"{registry.LoginServer}/myapp:v1.0.0"),
+            Build = "./container",
+            Registry = new ImageRegistry
+            {
+                Server = registry.LoginServer,
+                Username = registry.AdminUsername,
+                Password = registry.AdminPassword,
+            },
+        }, new ComponentResourceOptions { Parent = registry });
+        var vnet = new VirtualNetwork("vnet", new VirtualNetworkArgs()
         {
             AddressSpaces = "10.0.0.0/16",
             Subnets = new List<VirtualNetworkSubnetsArgs>()
-            {
-                //Do not use inline subnets here, its broken: https://www.terraform.io/docs/providers/azurerm/r/subnet.html
-            },
-            ResourceGroupName = networkResourceGroup.Name,
-            Name = $"myvnet{_uniqueid}"
+            {},
+            ResourceGroupName = applicationResourceGroup.Name,
+            Name = $"vnet"
         });
 
         var appGatewaySubnet = new Subnet("gateway-subnet", new SubnetArgs()
         {
-            Name = _azureGatewayNetworkUniqueName,
-            VirtualNetworkName = $"myvnet{_uniqueid}",
+            Name = AzureGatewayNetworkName,
+            VirtualNetworkName = $"vnet",
             AddressPrefix = "10.0.1.0/24",
-            ResourceGroupName = networkResourceGroup.Name,
-        }, new CustomResourceOptions() {  DependsOn = { vnet } });
+            ResourceGroupName = applicationResourceGroup.Name,
+        }, new CustomResourceOptions() { Parent = vnet });
 
         var applicationSubnet = new Subnet("application-subnet", new SubnetArgs()
         {
             Name = "applicationsubnet",
-            VirtualNetworkName = $"myvnet{_uniqueid}",
+            VirtualNetworkName = $"vnet",
             AddressPrefix = "10.0.0.0/24",
-            ResourceGroupName = networkResourceGroup.Name,
+            ResourceGroupName = applicationResourceGroup.Name,
             Delegations = new SubnetDelegationsArgs()
-            { 
+            {
                 Name = "SubnetDelegation",
                 ServiceDelegation = new SubnetDelegationsServiceDelegationArgs()
                 {
@@ -68,12 +69,11 @@ class MyStack : Stack
                     Actions = "Microsoft.Network/virtualNetworks/subnets/join/action"
                 }
             }
-        }, new CustomResourceOptions() { DependsOn = { vnet } });
-
+        }, new CustomResourceOptions() { Parent = vnet });
         var applicationNetworkProfile = new Profile("application-networking-profile", new ProfileArgs()
         {
             Name = "application-networking-profile",
-            ResourceGroupName = networkResourceGroup.Name,
+            ResourceGroupName = applicationResourceGroup.Name,
             ContainerNetworkInterface = new ProfileContainerNetworkInterfaceArgs()
             {
                 Name = "ContainerNetworkInterface",
@@ -84,62 +84,61 @@ class MyStack : Stack
                 }
             }
         });
-
-        var aci = new Group($"application{_uniqueid}", new GroupArgs()
+        var aci = new Group($"aci", new GroupArgs()
         {
             Containers = new GroupContainersArgs()
             {
-                Name = $"application{_uniqueid}",
-                Memory = 4,
-                Cpu = 2,
-                Image = "nginx",
+                Name = "aci",
+                Memory = 1.5,
+                Cpu = 0.5,
+                Image = dockerImage.ImageName,
                 Ports = new GroupContainersPortsArgs()
                 { 
-                    Port = 9000,
+                    Port = 80,
                     Protocol = "TCP"
                 },
             },
+            ImageRegistryCredentials = new GroupImageRegistryCredentialsArgs
+            {
+                Server = registry.LoginServer,
+                Username = registry.AdminUsername,
+                Password = registry.AdminPassword,
+            },
             OsType = "Linux",
             ResourceGroupName = applicationResourceGroup.Name,
-            Name = $"application{_uniqueid}",
+            Name = "application",
             IpAddressType = "Private",
             NetworkProfileId = applicationNetworkProfile.Id,
         });
-
-        
-
-        var publicIp = new PublicIp("gatewaypublicip", new PublicIpArgs()
+        var publicIp = new PublicIp("gateway-publicip", new PublicIpArgs()
         {
             Sku = "Standard",
-            ResourceGroupName = networkResourceGroup.Name,
+            ResourceGroupName = applicationResourceGroup.Name,
             AllocationMethod = "Static",
-            DomainNameLabel = $"application{_uniqueid}"
+            DomainNameLabel = "application" + Guid.NewGuid().ToString()
         });
         var backendAddressPools = new ApplicationGatewayBackendAddressPoolsArgs()
         {
             Name = "applicationBackendPool",
-            Fqdns = new InputList<string> 
-            {
-                aci.Fqdn
-            },
+            IpAddresses = aci.IpAddress
         };
         var frontendPorts = new ApplicationGatewayFrontendPortsArgs()
         {
-            Name = "sqfrontendport",
+            Name = "applicationfrontendport",
             Port = 80
         };
         var frontendIpConfigurations = new ApplicationGatewayFrontendIpConfigurationsArgs()
         {
-            Name = "appGwFrontEndIpConfig",
+            Name = "applicationFrontEndIpConfig",
             PublicIpAddressId = publicIp.Id,
         };
         var backendHttpSettings = new ApplicationGatewayBackendHttpSettingsArgs()
         {
             Name = "sqBackendHttpSettings",
-            Port = 9000,
+            Port = 80,
             Protocol = "Http",
             CookieBasedAffinity = "Disabled",
-            RequestTimeout = 30,            
+            RequestTimeout = 30,     
         };
         var appgwHttpListener = new ApplicationGatewayHttpListenersArgs()
         {
@@ -162,10 +161,9 @@ class MyStack : Stack
             HttpListenerName = appgwHttpListener.Name,
             RuleType = "Basic",            
         };
-        
-        new ApplicationGateway($"myappgw{_uniqueid}", new ApplicationGatewayArgs()
+        new ApplicationGateway($"applicationgateway", new ApplicationGatewayArgs()
         {
-            ResourceGroupName = networkResourceGroup.Name,
+            ResourceGroupName = applicationResourceGroup.Name,
             Sku = new ApplicationGatewaySkuArgs()
             {
                 Name = "Standard_v2",
