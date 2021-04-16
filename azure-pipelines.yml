@@ -17,7 +17,7 @@ steps:
 - task: NuGetCommand@2
   inputs:
     command: 'restore'
-    restoreSolution: '**/*.sln'
+    restoreSolution: '**/*.csproj'
     feedsToUse: 'select'
     vstsFeed: '59121a70-bbd7-4b98-829e-f8107643ed85/57b6da53-f4b0-48f2-b3bd-4e4605e0874d'
     includeNuGetOrg: false
