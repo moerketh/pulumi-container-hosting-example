@@ -1,0 +1,23 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- master
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- task: NuGetToolInstaller@1
+  inputs:
+    versionSpec: '5.x'
+    checkLatest: true
+- task: NuGetCommand@2
+  inputs:
+    command: 'restore'
+    restoreSolution: '**/*.sln'
+    feedsToUse: 'select'
+    vstsFeed: '59121a70-bbd7-4b98-829e-f8107643ed85/57b6da53-f4b0-48f2-b3bd-4e4605e0874d'
+    includeNuGetOrg: false
