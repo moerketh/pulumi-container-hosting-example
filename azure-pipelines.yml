@@ -19,5 +19,6 @@ steps:
     command: 'restore'
     restoreSolution: '**/*.csproj'
     feedsToUse: 'select'
-    vstsFeed: '59121a70-bbd7-4b98-829e-f8107643ed85/57b6da53-f4b0-48f2-b3bd-4e4605e0874d'
+    vstsFeed: '4248bd04-de37-46bf-8598-440f7ea9e9af'
     includeNuGetOrg: false
+    noCache: true
